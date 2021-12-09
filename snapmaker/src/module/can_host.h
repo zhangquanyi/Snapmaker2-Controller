@@ -84,6 +84,8 @@ typedef enum {
 class CanHost {
   public:
 
+    ErrCode ReInit();
+    ErrCode Scan_Modules();
     ErrCode Init();
 
     ErrCode SendStdCmd(CanStdMesgCmd_t &message);
@@ -112,6 +114,19 @@ class CanHost {
     uint32_t mac(uint8_t index) {
       if (index < total_mac_)
         return mac_[index].val;
+      else
+        return MODULE_MAC_ID_INVALID;
+    }
+    uint32_t laser_mac(uint8_t index) {
+      if (index < total_mac_)
+      {
+        if (MODULE_GET_DEVICE_ID(mac_[index].val) == MODULE_DEVICE_ID_CNC)
+        {
+          return mac_[index].val;
+        }
+        else
+          return MODULE_MAC_ID_INVALID;  
+      }  
       else
         return MODULE_MAC_ID_INVALID;
     }

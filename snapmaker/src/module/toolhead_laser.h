@@ -26,6 +26,8 @@
 
 #include "../hmi/uart_host.h"
 
+#define AGING_NUM 6
+
 #define TOOLHEAD_LASER_POWER_SAFE_LIMIT   (0.5)
 #define TOOLHEAD_LASER_POWER_NORMAL_LIMIT (100)
 #define TOOLHEAD_LASER_CAMERA_FOCUS_MAX   (65000)  // mm*1000
@@ -87,6 +89,12 @@ enum LASER_10W_STATUS {
   LASER_10W_DISABLE,
 };
 
+enum KeyState {
+  KEY_CHECK_ON,
+  KEY_CHECK_OFF,
+  KEY_INIT,
+  KEY_INVALID,
+};
 
 class ToolHeadLaser: public ModuleBase {
   public:
@@ -113,7 +121,18 @@ class ToolHeadLaser: public ModuleBase {
       pwm_pin_pullup_state_ = 0xff;
       pwm_pin_pulldown_state_ = 0xff;
     }
+    static uint8_t module_count;
+    static class ToolHeadLaser* mc_port[AGING_NUM];
+    static ErrCode LaserInit(MAC_t &mac, uint8_t mac_index);
+    static void AgingProcess(void);
+    void DeInit(void);
+    uint8_t port_index_;
+    int8_t GetIMUTemp() { return imu_temperature_; }
+    int8_t GetLaserTemp() { return laser_temperature_; }
 
+    message_id_t msg_id_get_focus_;
+    message_id_t msg_id_report_security_;
+    
     ErrCode Init(MAC_t &mac, uint8_t mac_index);
     void TurnoffLaserIfNeeded();
 
@@ -156,6 +175,9 @@ class ToolHeadLaser: public ModuleBase {
     void LaserConfirmPinState();
     void Process();
 
+    // void CallbackAckLaserFocus(CanStdDataFrame_t &cmd);
+    // void CallbackAckReportSecurity(CanStdDataFrame_t &cmd);
+
     uint32_t mac(uint8_t sub_index = 0) { return canhost.mac(mac_index_); }
 
     float power() { return power_val_; }
@@ -195,7 +217,8 @@ class ToolHeadLaser: public ModuleBase {
     // save orignal value from module
     uint16_t focus_;
     message_id_t msg_id_set_fan_;
-    message_id_t msg_id_get_focus_;
+    // message_id_t msg_id_get_focus_;
+    // message_id_t msg_id_report_security_;
     UartHost esp32_;
 
     bool laser_pwm_pin_checked_;
@@ -216,6 +239,6 @@ class ToolHeadLaser: public ModuleBase {
 
 extern ToolHeadLaser *laser;
 extern ToolHeadLaser laser_1_6_w;
-extern ToolHeadLaser laser_10w;
+extern ToolHeadLaser laser_10w[6];
 
 #endif  // #ifndef TOOLHEAD_LASER_H_

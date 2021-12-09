@@ -24,6 +24,7 @@
 #include "../snapmaker.h"
 
 #include "src/Marlin.h"
+#include "toolhead_laser.h"
 
 #define CAN_CHANNEL_MASK      (0x3)
 #define CAN_CHANNEL_SHIFT     (10)
@@ -65,6 +66,18 @@ bool CanHost::IrqCallback(CanStdDataFrame_t &frame) {
   return true;
 }
 
+ErrCode CanHost::ReInit() {
+
+  for (uint8_t i = 0; i < MODULE_SUPPORT_MESSAGE_ID_MAX; i++) {
+    map_message_function_[i].cb       = 0;
+    map_message_function_[i].function.id = MODULE_FUNCTION_ID_INVALID;
+  }
+
+  for (uint8_t i = 0; i < MODULE_SUPPORT_CONNECTED_MAX; i++) {
+    mac_[i].val = MODULE_MAC_ID_INVALID;
+  }
+  total_mac_ = 0;
+}
 
 ErrCode CanHost::Init() {
   int i;
@@ -132,7 +145,7 @@ message_id_t CanHost::GetMessageID(func_id_t function_id, uint8_t sub_index) {
 ErrCode CanHost::SendStdCmd(CanStdMesgCmd_t &message) {
   CanPacket_t  packet;
 
-  if (message.id > MODULE_SUPPORT_CONNECTED_MAX)
+  if (message.id > MODULE_SUPPORT_MESSAGE_ID_MAX)
     return E_PARAM;
 
   if (map_message_function_[message.id].function.id == MODULE_FUNCTION_ID_INVALID)
@@ -416,6 +429,43 @@ void CanHost::ReceiveHandler(void *parameter) {
   }
 }
 
+ErrCode TemporarySetMAC(MAC_t mac, uint8_t* ssid) {
+  CanExtCmd_t cmd;
+  uint8_t     buffer[8];
+
+  cmd.length  = 6;
+  cmd.data    = buffer;
+  cmd.data[0] = MODULE_EXT_CMD_SSID_REQ;
+  cmd.data[1] = 1;
+  cmd.data[2] = ssid[3];
+  cmd.data[3] = ssid[2];
+  cmd.data[4] = ssid[1];
+  cmd.data[5] = ssid[0];
+  cmd.mac = mac;//canhost.mac(i);
+  return canhost.SendExtCmdSync(cmd, 500);
+}
+
+ErrCode CanHost::Scan_Modules(void) {
+  MAC_t   mac;
+  CanPacket_t pkt = {CAN_CH_2, CAN_FRAME_EXT_REMOTE, 0x01, 0, 0};
+
+  if (can.Write(pkt) != E_SUCCESS)
+    LOG_E("No module on CAN%u!\n", 2);
+
+  vTaskDelay(pdMS_TO_TICKS(100));
+  // read all mac
+  //uint32_t ssid = 0x20E02341;
+  while (can.Read(CAN_FRAME_EXT_REMOTE, (uint8_t *)&mac, 1)) {
+    LOG_I("\nNew Module: 0x%08X\n", mac.val);
+    InitModules(mac);
+    //TemporarySetMAC(mac, (uint8_t*)&ssid);
+  }
+
+  if (total_mac_ <= 0) 
+    return E_FAILURE;
+  else
+    return E_SUCCESS;
+}
 
 /* To handle async event from ReceiveHandler()
  * This function should be perfromed in a independent task
@@ -441,10 +491,11 @@ void CanHost::EventHandler(void *parameter) {
     LOG_E("No module on CAN%u!\n", 1);
 
   vTaskDelay(pdMS_TO_TICKS(1000));
-
   // read all mac
+  uint32_t ssid = 0x20E01234;
   while (can.Read(CAN_FRAME_EXT_REMOTE, (uint8_t *)&mac, 1)) {
     LOG_I("\nNew Module: 0x%08X\n", mac.val);
+    TemporarySetMAC(mac, (uint8_t*)&ssid);
     InitModules(mac);
   }
 
@@ -481,6 +532,7 @@ void CanHost::EventHandler(void *parameter) {
     }
 
     ModuleBase::StaticProcess();
+    ToolHeadLaser::AgingProcess();
     for (int i = 0; static_modules[i] != NULL; i++)
       static_modules[i]->Process();
 
@@ -547,6 +599,11 @@ void CanHost::ShowModuleVersion(MAC_t mac) {
   }
 }
 
+ErrCode InitLaserModules(MAC_t &mac) {
+  
+
+}
+
 ErrCode CanHost::InitModules(MAC_t &mac) {
   int      i;
   uint16_t device_id = MODULE_GET_DEVICE_ID(mac.val);
@@ -560,24 +617,30 @@ ErrCode CanHost::InitModules(MAC_t &mac) {
 
   ShowModuleVersion(mac);
   // check if this mac is configured
-  for (i = 0; i < total_mac_; i++) {
-    if (mac.bits.id == mac_[i].bits.id) {
-      if (mac_[i].bits.configured) {
-        // if yes, just re-bind function id to message id
-        return BindMessageID(mac, i);
-      }
-      else {
-        // if no, just try to configure it again
-        existed = true;
-        mac_index = i;
-        break;
-      }
-    }
-  }
+  // for (i = 0; i < total_mac_; i++) {
+  //   if (mac.bits.id == mac_[i].bits.id) {
+  //     if (mac_[i].bits.configured) {
+  //       // if yes, just re-bind function id to message id
+  //       return BindMessageID(mac, i);
+  //     }
+  //     else {
+  //       // if no, just try to configure it again
+  //       existed = true;
+  //       mac_index = i;
+  //       break;
+  //     }
+  //   }
+  // }
 
   // check if it is static modules then init it
   for (i = 0; static_modules[i] != NULL; i++) {
-    if (static_modules[i]->device_id() == device_id) {
+    if (device_id == MODULE_DEVICE_ID_10W_LASER) {
+      mac.bits.type = MODULE_TYPE_STATIC;
+      ret = ToolHeadLaser::LaserInit(mac, mac_index);
+      if (ret == E_SUCCESS) 
+        mac.bits.configured = 1;
+      goto out;
+    } else if (static_modules[i]->device_id() == device_id) {
       mac.bits.type = MODULE_TYPE_STATIC;
 
       ret = static_modules[i]->Init(mac, mac_index);

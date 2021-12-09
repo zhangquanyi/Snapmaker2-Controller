@@ -38,6 +38,10 @@
 #include "../service/system.h"
 #include "toolhead_3dp.h"
 
+#include "../../Marlin/src/module/temperature.h"
+#include "../../Marlin/src/HAL\HAL_GD32F1/HAL_breathlight_STM32F1.h"
+#include "can_channel.h"
+#include "can_host.h"
 
 #define LASER_CLOSE_FAN_DELAY     (120)
 #define LASER_10W_DISABLE_DELAY     (2)
@@ -46,7 +50,12 @@
 #define TimGetPwm()  Tim1GetCCR4()
 
 ToolHeadLaser laser_1_6_w(MODULE_DEVICE_ID_1_6_W_LASER);
-ToolHeadLaser laser_10w(MODULE_DEVICE_ID_10W_LASER);
+
+ToolHeadLaser laser_10w[AGING_NUM] = {MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, 
+                                      MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER};                                     
+uint8_t ToolHeadLaser::module_count = 0;
+ToolHeadLaser* ToolHeadLaser::mc_port[AGING_NUM] = {NULL};
+
 ToolHeadLaser *laser = &laser_1_6_w;
 
 extern void Tim1SetCCR4(uint16_t pwm);
@@ -62,11 +71,35 @@ static __attribute__((section(".data"))) uint8_t power_table[]= {
 };
 
 static void CallbackAckLaserFocus(CanStdDataFrame_t &cmd) {
+  message_id_t msg_id = cmd.id.bits.msg_id;
+
+  for (uint8_t i = 0; i < AGING_NUM; i++) {
+    if (laser_10w[i].msg_id_get_focus_ == msg_id) {
+      laser = &laser_10w[i];
+      break;
+    }
+    if (i == AGING_NUM - 1)
+      return;
+  }
+
   laser->focus(cmd.data[0]<<8 | cmd.data[1]);
 }
 
 static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
+  message_id_t msg_id = cmd.id.bits.msg_id;
+
+  for (uint8_t i = 0; i < AGING_NUM; i++) {
+    if (laser_10w[i].msg_id_report_security_ == msg_id) {
+      laser = &laser_10w[i];
+      break;
+    }
+    if (i == AGING_NUM - 1)
+      return;
+  }
+
   laser->security_status_ = cmd.data[0];
+  laser->security_status_ &= ~0x8;
+  //laser->security_status_ &= ~0x4;
   laser->pitch_ = (cmd.data[1] << 8) | cmd.data[2];
   laser->roll_ = (cmd.data[3] << 8) | cmd.data[4];
   laser->laser_temperature_ = cmd.data[5];
@@ -85,6 +118,192 @@ static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
   }
 }
 
+static KeyState KeyProcess(void) {
+  static uint8_t debounce = 0, debounce2 = 0;
+  static float* temp_bed = &Temperature::temp_bed.current;
+  KeyState key_value = KEY_INVALID;
+
+  if (*temp_bed < 0.0 && ++debounce >= 10) {
+      debounce = 10;
+      key_value = KEY_CHECK_OFF;
+  } else if (*temp_bed >= 0.0) {
+    debounce = 0;
+  }
+
+  if (*temp_bed > 200.0 && ++debounce2 >= 10) {
+      debounce2 = 10;
+      key_value = KEY_CHECK_ON;
+  } else if (*temp_bed <= 200.0) {
+    debounce2 = 0;
+  }
+
+  return key_value;
+}
+
+static void OpenAllLaser(uint8_t pwm = 1) {
+  for (uint8_t i = 0; i < 6; i++) {
+    if (ToolHeadLaser::mc_port[i] != NULL) {
+      ToolHeadLaser::mc_port[i]->SetOutput(pwm);
+    }
+  }
+}
+
+static void ReadAllLaserTemp(void) {
+  SSTP_Event_t event;
+  int8_t imu_temp, laser_temp;
+
+  for (uint8_t i = 0; i < 6; i++) {
+    if (ToolHeadLaser::mc_port[i] != NULL) {
+      ToolHeadLaser::mc_port[i]->GetSecurityStatus(event);
+      imu_temp = ToolHeadLaser::mc_port[i]->GetIMUTemp();
+      laser_temp = ToolHeadLaser::mc_port[i]->GetLaserTemp();
+      LOG_E("[PORT %u] imu_temp: [%u]  laser_temp: [%u]\n", i + 1, imu_temp, laser_temp);
+    }
+  }
+}
+
+static void LaserReInit(void) {
+  ToolHeadLaser::module_count = 0;
+  canhost.ReInit();
+
+  for (uint8_t i = 0; i < 6; i++) {
+    laser_10w[i].DeInit();
+    ToolHeadLaser::mc_port[i] = NULL;
+  }
+}
+
+void ToolHeadLaser::DeInit(void) {
+  power_limit_ = 100;
+  power_pwm_   = 0;
+  power_val_   = 0;
+  mac_index_   = MODULE_MAC_INDEX_INVALID;
+  focus_ = TOOLHEAD_LASER_CAMERA_FOCUS_MAX / 1000;
+  state_ = TOOLHEAD_LASER_STATE_OFF;
+  fan_state_ = TOOLHEAD_LASER_FAN_STATE_CLOSED;
+  fan_tick_  = 0;
+  msg_id_set_fan_   = MODULE_MESSAGE_ID_INVALID;
+  msg_id_get_focus_ = MODULE_MESSAGE_ID_INVALID;
+  timer_in_process_ = 0;
+  pitch_ = 0;
+  roll_ = 0;
+  security_status_ = 0;
+  laser_temperature_ = 0;
+  imu_temperature_   = 0;
+  need_to_turnoff_laser_ = false;
+  need_to_tell_hmi_ = false;
+  laser_10w_status_ = LASER_10W_DISABLE;
+  laser_pwm_pin_checked_ = false;
+  pwm_pin_pullup_state_ = 0xff;
+  pwm_pin_pulldown_state_ = 0xff;
+}
+
+void ToolHeadLaser::AgingProcess(void) {
+  static millis_t cur_mills, total_mills = 0;
+  static KeyState state = KEY_INIT;
+  static uint16_t output_info_time;
+  uint32_t aging_time = 8 * 3600;
+
+  KeyState key_value = KeyProcess();
+
+  switch (state) {
+    case KEY_INIT:   
+      if (key_value == KEY_CHECK_OFF) {
+        state = KEY_CHECK_OFF;
+        //LOG_E("KEY_INIT: KEY_CHECK_OFF\n");
+      }
+      else if (key_value == KEY_CHECK_ON) {
+        state = KEY_INVALID;
+        //LOG_E("KEY_INIT: KEY_CHECK_INVALID\n");
+      }
+      cur_mills = millis();
+      break;
+
+    case KEY_INVALID:
+      if (key_value == KEY_CHECK_OFF) {
+        state = KEY_CHECK_OFF;
+        //LOG_E("KEY_INVALID: KEY_CHECK_OFF\n");
+      }
+      break;
+
+    case KEY_CHECK_ON:
+      total_mills += (millis() > cur_mills) ? (millis() - cur_mills) : 0;
+      cur_mills = millis();
+
+      if (key_value == KEY_CHECK_OFF || (total_mills >= aging_time * 1000)) {
+        if (total_mills >= aging_time * 1000) {
+          state = KEY_INVALID;
+          //LOG_E("Aging end: KEY_CHECK_OFF\n");
+        } else {
+          state = KEY_CHECK_OFF;
+          //LOG_E("KEY_CHECK_ON: KEY_CHECK_OFF\n");
+        }
+      }
+
+      if (output_info_time++ >= 200 || state != KEY_CHECK_ON) {
+        output_info_time = 0;
+        ReadAllLaserTemp();
+        uint32_t pass_total_sex = total_mills / 1000;
+        uint32_t residue_total_sex = aging_time - pass_total_sex;
+        uint8_t pass_hour = pass_total_sex / 3600;
+        uint8_t pass_min = pass_total_sex % 3600 / 60;
+        uint8_t pass_sex = pass_total_sex % 3600 % 60; 
+        uint8_t residue_hour = residue_total_sex / 3600;
+        uint8_t residue_min = residue_total_sex % 3600 / 60;
+        uint8_t residue_sex = residue_total_sex % 3600 % 60; 
+        float progress = (float)pass_total_sex * 100.0 / (float)aging_time;
+
+        LOG_E("Aging time:[%2u : %2u : %2u]  Remaining:[%2u : %2u : %2u]  Progress: %4.2f%%\n\n",
+              pass_hour, pass_min, pass_sex, residue_hour, residue_min, residue_sex, progress);
+        
+        if (state != KEY_CHECK_ON) {
+          total_mills = 0;
+          output_info_time = 0;
+          BreathLightAlwaysOn();
+          LaserReInit();
+          disable_power_domain(POWER_DOMAIN_1);
+        }
+      }
+      break;
+
+    case KEY_CHECK_OFF:
+      if (key_value == KEY_CHECK_ON) {
+        state = KEY_CHECK_ON;
+        //LOG_E("KEY_CHECK_OFF: KEY_CHECK_ON\n");
+
+        BreathLightInit();
+        enable_power_domain(POWER_DOMAIN_1);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (canhost.Scan_Modules() == E_SUCCESS) {
+          OpenAllLaser(1);
+        }
+        cur_mills = millis();
+      }
+      break;
+
+    default:
+      break;
+  }
+}
+
+ErrCode ToolHeadLaser::LaserInit(MAC_t &mac, uint8_t mac_index) {
+  ErrCode ret;
+
+  if (module_count >= AGING_NUM)
+    return E_FAILURE;
+  
+  uint8_t dir_pin[] = {E0_STEP_PIN, E1_STEP_PIN, X_STEP_PIN, Y_STEP_PIN, Z_STEP_PIN, B_STEP_PIN};
+  if (!module_count) {
+    for (uint8_t i = 0; i < 6; i++)
+      OUT_WRITE(dir_pin[i], 1);
+  }
+    
+  ret = laser_10w[module_count].Init(mac, mac_index);
+  module_count++;
+  vTaskDelay(pdMS_TO_TICKS(500));
+
+  return ret;
+}
+
 ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
   ErrCode ret;
 
@@ -93,15 +312,33 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
 
   Function_t    function;
   message_id_t  message_id[12];
+  uint8_t dir_pin[] = {E0_DIR_PIN, E1_DIR_PIN, X_DIR_PIN, Y_DIR_PIN, Z_DIR_PIN, B_DIR_PIN};
 
   if (axis_to_port[E_AXIS] != PORT_8PIN_1) {
     LOG_E("toolhead Laser failed: Please use the <M1029 E1> set E port\n");
     return E_HARDWARE;
   }
 
-  ret = ModuleBase::InitModule8p(mac, E0_DIR_PIN, 0);
-  if (ret != E_SUCCESS)
-    return ret;
+  for (uint8_t i = 0; i < 6; i++) 
+      SET_OUTPUT(dir_pin[i]);
+  vTaskDelay(pdMS_TO_TICKS(10));  
+
+  for (uint8_t i = 0; i < 6; i++) {
+    if (mc_port[i] == NULL) {
+      ret = ModuleBase::InitModule8p(mac, dir_pin[i], 0);
+      if (ret == E_SUCCESS) {
+        mc_port[i] = this;
+        port_index_ = i;
+        break;
+      } 
+      if (i == 5) {
+        return E_FAILURE;
+      }
+    }
+  }
+  // ret = ModuleBase::InitModule8p(mac, E0_DIR_PIN, 0);
+  // if (ret != E_SUCCESS)
+  //   return ret;
 
   LOG_I("\tGot toolhead Laser!\n");
 
@@ -121,7 +358,7 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
 
   function.channel   = mac.bits.channel;
   function.mac_index = mac_index;
-  function.sub_index = 0;
+  function.sub_index = port_index_;
   function.priority  = MODULE_FUNC_PRIORITY_DEFAULT;
 
   // register function ids to can host, it will assign message id
@@ -132,6 +369,7 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
       msg_id_get_focus_ = message_id[i];
     } else if (function.id == MODULE_FUNC_REPORT_SECURITY_STATUS) {
       message_id[i] = canhost.RegisterFunction(function, CallbackAckReportSecurity);
+      msg_id_report_security_ = message_id[i];
     } else {
       message_id[i] = canhost.RegisterFunction(function, NULL);
     }
@@ -143,7 +381,7 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
   ret = canhost.BindMessageID(cmd, message_id);
 
   Tim1PwmInit();
-  esp32_.Init(&MSerial3, EXECUTOR_SERIAL_IRQ_PRIORITY);
+  // esp32_.Init(&MSerial3, EXECUTOR_SERIAL_IRQ_PRIORITY);
 
   mac_index_ = mac_index;
   state_     = TOOLHEAD_LASER_STATE_OFF;
@@ -176,7 +414,10 @@ uint16_t ToolHeadLaser::tim_pwm() {
   return TimGetPwm();
 }
 void ToolHeadLaser::tim_pwm(uint16_t pwm) {
-  TimSetPwm(pwm);
+  //TimSetPwm(pwm);
+  uint8_t dir_pin[] = {E0_STEP_PIN, E1_STEP_PIN, X_STEP_PIN, Y_STEP_PIN, Z_STEP_PIN, B_STEP_PIN};
+
+  OUT_WRITE(dir_pin[this->port_index_], (pwm ? 0 : 1));
 }
 
 void ToolHeadLaser::TurnOn() {
@@ -393,7 +634,7 @@ ErrCode ToolHeadLaser::SetFocus(SSTP_Event_t &event) {
   cmd.data   = buff;
   cmd.length = 3;
 
-  err = canhost.SendStdCmd(cmd, 0);
+  err = canhost.SendStdCmd(cmd, this->port_index_);
 
   if (err == E_SUCCESS)
     LoadFocus();
@@ -775,7 +1016,7 @@ ErrCode ToolHeadLaser::SetAutoFocusLight(SSTP_Event_t &event) {
 
   uint8_t buff[1];
 
-  if (canhost.SendStdCmdSync(cmd, 2000) == E_SUCCESS) {
+  if (canhost.SendStdCmdSync(cmd, 2000, 1, this->port_index_) == E_SUCCESS) {
     buff[0] = 0;
   } else {
     buff[0] = 1;
@@ -794,7 +1035,7 @@ ErrCode ToolHeadLaser::GetSecurityStatus(SSTP_Event_t &event) {
   cmd.id        = MODULE_FUNC_REPORT_SECURITY_STATUS;
   cmd.data      = NULL;
   cmd.length    = 0;
-  return canhost.SendStdCmd(cmd);
+  return canhost.SendStdCmd(cmd, this->port_index_);
 }
 
 ErrCode ToolHeadLaser::SendSecurityStatus() {
@@ -836,7 +1077,7 @@ ErrCode ToolHeadLaser::SetOnlineSyncId(SSTP_Event_t &event) {
   cmd.data      = can_buffer;
   cmd.length    = 5;
 
-  canhost.SendStdCmd(cmd);
+  canhost.SendStdCmd(cmd, this->port_index_);
 
   SSTP_Event_t event_hmi = {EID_SETTING_ACK, SETTINGS_OPC_SET_ONLINE_SYNC_ID};
   uint8_t buff[1] = {0};
@@ -856,7 +1097,7 @@ ErrCode ToolHeadLaser::GetOnlineSyncId(SSTP_Event_t &event) {
   cmd.length    = 1;
 
   ErrCode ret;
-  ret = canhost.SendStdCmdSync(cmd, 2000);
+  ret = canhost.SendStdCmdSync(cmd, 2000, 1, this->port_index_);
   if (ret != E_SUCCESS) {
     return ret;
   }
@@ -889,7 +1130,7 @@ ErrCode ToolHeadLaser::SetProtectTemp(SSTP_Event_t &event) {
   cmd.data      = (uint8_t *)can_buffer;
   cmd.length    = 2;
 
-  return canhost.SendStdCmd(cmd);
+  return canhost.SendStdCmd(cmd, this->port_index_);
 }
 
 ErrCode ToolHeadLaser::LaserControl(uint8_t state) {
@@ -902,7 +1143,7 @@ ErrCode ToolHeadLaser::LaserControl(uint8_t state) {
   cmd.length    = 1;
 
   ErrCode ret;
-  ret = canhost.SendStdCmdSync(cmd, 2000);
+  ret = canhost.SendStdCmdSync(cmd, 2000, 1, this->port_index_);
   if (ret != E_SUCCESS) {
     return ret;
   }
@@ -919,7 +1160,7 @@ ErrCode ToolHeadLaser::LaserGetHWVersion() {
   cmd.length    = 1;
 
   ErrCode ret;
-  ret = canhost.SendStdCmdSync(cmd, 2000);
+  ret = canhost.SendStdCmdSync(cmd, 2000, 1, this->port_index_);
   if (ret != E_SUCCESS) {
     return ret;
   }
@@ -936,9 +1177,9 @@ ErrCode ToolHeadLaser::LaserGetHWVersion() {
 void ToolHeadLaser::TellSecurityStatus() {
   SendSecurityStatus();
   SERIAL_ECHO("Laser 10w security state: 0x");
-  SERIAL_PRINTLN(laser->security_status_, HEX);
+  SERIAL_PRINTLN(this->security_status_, HEX);
 
-  SERIAL_ECHOLNPAIR("Laser 10w temp: ", laser->laser_temperature_, ", imu temp: ", laser->imu_temperature_, ", roll: ", laser->roll_, ", pitch: ", laser->pitch_, ", pwm_pin_pulldown_state_: ", laser->pwm_pin_pulldown_state_, ", pwm_pin_pullup_state_: ", laser->pwm_pin_pullup_state_);
+  SERIAL_ECHOLNPAIR("Laser 10w temp: ", this->laser_temperature_, ", imu temp: ", this->imu_temperature_, ", roll: ", this->roll_, ", pitch: ", this->pitch_, ", pwm_pin_pulldown_state_: ", this->pwm_pin_pulldown_state_, ", pwm_pin_pullup_state_: ", this->pwm_pin_pullup_state_);
 }
 
 uint8_t ToolHeadLaser::LaserGetPwmPinState() {
@@ -949,7 +1190,7 @@ uint8_t ToolHeadLaser::LaserGetPwmPinState() {
   cmd.data      = can_buffer;
   cmd.length    = 1;
 
-  if (canhost.SendStdCmdSync(cmd, 2000) != E_SUCCESS) {
+  if (canhost.SendStdCmdSync(cmd, 2000, 1, this->port_index_) != E_SUCCESS) {
     return 0xff;
   }
 
@@ -964,7 +1205,7 @@ void ToolHeadLaser::LaserConfirmPinState() {
   cmd.data      = can_buffer;
   cmd.length    = 1;
 
-  canhost.SendStdCmd(cmd);
+  canhost.SendStdCmd(cmd, this->port_index_);
 }
 
 void ToolHeadLaser::Process() {
@@ -972,20 +1213,20 @@ void ToolHeadLaser::Process() {
   timer_in_process_ = 0;
 
   if (laser->device_id_ == MODULE_DEVICE_ID_10W_LASER) {
-    if (laser_pwm_pin_checked_ == false) {
-      PwmCtrlDirectly(255);
-      pwm_pin_pulldown_state_ = LaserGetPwmPinState();
-      PwmCtrlDirectly(0);
-      pwm_pin_pullup_state_ = LaserGetPwmPinState();
-      if (pwm_pin_pulldown_state_ == 0 && pwm_pin_pullup_state_ == 1) {
-        LaserConfirmPinState();
-      }
-      laser_pwm_pin_checked_ = true;
-    }
+    // if (laser_pwm_pin_checked_ == false) {
+    //   PwmCtrlDirectly(255);
+    //   pwm_pin_pulldown_state_ = LaserGetPwmPinState();
+    //   PwmCtrlDirectly(0);
+    //   pwm_pin_pullup_state_ = LaserGetPwmPinState();
+    //   if (pwm_pin_pulldown_state_ == 0 && pwm_pin_pullup_state_ == 1) {
+    //     LaserConfirmPinState();
+    //   }
+    //   laser_pwm_pin_checked_ = true;
+    // }
 
     if (need_to_tell_hmi_) {
       need_to_tell_hmi_ = false;
-      TellSecurityStatus();
+      //TellSecurityStatus();
     }
 
     TurnoffLaserIfNeeded();

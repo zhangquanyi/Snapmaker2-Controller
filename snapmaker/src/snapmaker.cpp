@@ -319,6 +319,7 @@ void SnapmakerSetupPost() {
   enable_all_steppers();
 
   BreathLightInit();
+  BreathLightAlwaysOn();
 
   CheckAppValidFlag();
 
@@ -329,7 +330,7 @@ void SnapmakerSetupPost() {
 
   canhost.Init();
 
-  enable_power_domain(POWER_DOMAIN_LINEAR);
+  //enable_power_domain(POWER_DOMAIN_LINEAR);
   enable_power_domain(POWER_DOMAIN_ADDON);
 
   sm2_handle = (SnapmakerHandle_t)pvPortMalloc(sizeof(struct SnapmakerHandle));

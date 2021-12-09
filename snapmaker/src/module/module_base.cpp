@@ -54,7 +54,13 @@ ModuleBase *static_modules[] = {
   &linear_tmc,
   &rotaryModule,
   &purifier,
-  &laser_10w,
+  &laser_10w[0],
+  &laser_10w[1],
+  &laser_10w[2],
+  &laser_10w[3],
+  &laser_10w[4],
+  &laser_10w[5],
+  &laser_10w[6],
   NULL
 };
 
