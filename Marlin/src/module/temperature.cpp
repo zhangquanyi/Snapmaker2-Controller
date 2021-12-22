@@ -1366,8 +1366,9 @@ float Temperature::analog_to_celsius_hotend(const int raw, const uint8_t e) {
 #if HAS_HEATED_BED
   // Derived from RepRap FiveD extruder::getTemperature()
   // For bed temperature measurement.
-  float Temperature::analog_to_celsius_bed(const int raw) {
+  float Temperature::analog_to_celsius_bed(int raw) {
     #if ENABLED(HEATER_BED_USES_THERMISTOR)
+      if (raw > 0 && raw < 500)  raw = 500;   
       SCAN_THERMISTOR_TABLE(BEDTEMPTABLE, BEDTEMPTABLE_LEN);
     #elif ENABLED(HEATER_BED_USES_AD595)
       return TEMP_AD595(raw);
