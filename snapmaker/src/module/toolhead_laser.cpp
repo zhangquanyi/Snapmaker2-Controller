@@ -158,6 +158,8 @@ static void ReadAllLaserTemp(void) {
       imu_temp = ToolHeadLaser::mc_port[i]->GetIMUTemp();
       laser_temp = ToolHeadLaser::mc_port[i]->GetLaserTemp();
       LOG_E("[PORT %u] imu_temp: [%u]  laser_temp: [%u]\n", i + 1, imu_temp, laser_temp);
+      ToolHeadLaser::mc_port[i]->SetIMUTemp(0);
+      ToolHeadLaser::mc_port[i]->SetLaserTemp(0);
     }
   }
 }

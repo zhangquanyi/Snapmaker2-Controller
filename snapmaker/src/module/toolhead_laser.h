@@ -129,6 +129,8 @@ class ToolHeadLaser: public ModuleBase {
     uint8_t port_index_;
     int8_t GetIMUTemp() { return imu_temperature_; }
     int8_t GetLaserTemp() { return laser_temperature_; }
+    int8_t SetIMUTemp(float t) { imu_temperature_ = t; }
+    int8_t SetLaserTemp(float t) { laser_temperature_ = t; }
 
     message_id_t msg_id_get_focus_;
     message_id_t msg_id_report_security_;
