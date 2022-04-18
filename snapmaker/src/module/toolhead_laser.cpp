@@ -51,8 +51,8 @@
 
 ToolHeadLaser laser_1_6_w(MODULE_DEVICE_ID_1_6_W_LASER);
 
-ToolHeadLaser laser_10w[AGING_NUM] = {MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, 
-                                      MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER};                                     
+ToolHeadLaser laser_10w[AGING_NUM] = {MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER,
+                                      MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER, MODULE_DEVICE_ID_10W_LASER};
 uint8_t ToolHeadLaser::module_count = 0;
 ToolHeadLaser* ToolHeadLaser::mc_port[AGING_NUM] = {NULL};
 
@@ -203,12 +203,12 @@ void ToolHeadLaser::AgingProcess(void) {
   static millis_t cur_mills, total_mills = 0;
   static KeyState state = KEY_INIT;
   static uint16_t output_info_time;
-  uint32_t aging_time = 8 * 3600;
+  uint32_t aging_time = 4 * 3600;
 
   KeyState key_value = KeyProcess();
 
   switch (state) {
-    case KEY_INIT:   
+    case KEY_INIT:
       if (key_value == KEY_CHECK_OFF) {
         state = KEY_CHECK_OFF;
         //LOG_E("KEY_INIT: KEY_CHECK_OFF\n");
@@ -248,15 +248,15 @@ void ToolHeadLaser::AgingProcess(void) {
         uint32_t residue_total_sex = aging_time - pass_total_sex;
         uint8_t pass_hour = pass_total_sex / 3600;
         uint8_t pass_min = pass_total_sex % 3600 / 60;
-        uint8_t pass_sex = pass_total_sex % 3600 % 60; 
+        uint8_t pass_sex = pass_total_sex % 3600 % 60;
         uint8_t residue_hour = residue_total_sex / 3600;
         uint8_t residue_min = residue_total_sex % 3600 / 60;
-        uint8_t residue_sex = residue_total_sex % 3600 % 60; 
+        uint8_t residue_sex = residue_total_sex % 3600 % 60;
         float progress = (float)pass_total_sex * 100.0 / (float)aging_time;
 
         LOG_E("Aging time:[%2u : %2u : %2u]  Remaining:[%2u : %2u : %2u]  Progress: %4.2f%%\n\n",
               pass_hour, pass_min, pass_sex, residue_hour, residue_min, residue_sex, progress);
-        
+
         if (state != KEY_CHECK_ON) {
           total_mills = 0;
           output_info_time = 0;
@@ -292,13 +292,13 @@ ErrCode ToolHeadLaser::LaserInit(MAC_t &mac, uint8_t mac_index) {
 
   if (module_count >= AGING_NUM)
     return E_FAILURE;
-  
+
   uint8_t dir_pin[] = {E0_STEP_PIN, E1_STEP_PIN, X_STEP_PIN, Y_STEP_PIN, Z_STEP_PIN, B_STEP_PIN};
   if (!module_count) {
     for (uint8_t i = 0; i < 6; i++)
       OUT_WRITE(dir_pin[i], 1);
   }
-    
+
   ret = laser_10w[module_count].Init(mac, mac_index);
   module_count++;
   vTaskDelay(pdMS_TO_TICKS(500));
@@ -321,9 +321,9 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
     return E_HARDWARE;
   }
 
-  for (uint8_t i = 0; i < 6; i++) 
+  for (uint8_t i = 0; i < 6; i++)
       SET_OUTPUT(dir_pin[i]);
-  vTaskDelay(pdMS_TO_TICKS(10));  
+  vTaskDelay(pdMS_TO_TICKS(10));
 
   for (uint8_t i = 0; i < 6; i++) {
     if (mc_port[i] == NULL) {
@@ -332,7 +332,7 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
         mc_port[i] = this;
         port_index_ = i;
         break;
-      } 
+      }
       if (i == 5) {
         return E_FAILURE;
       }
