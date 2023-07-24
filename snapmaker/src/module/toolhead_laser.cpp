@@ -55,6 +55,10 @@ extern void Tim1SetCCR4(uint16_t pwm);
 extern uint16_t Tim1GetCCR4();
 extern void Tim1PwmInit(unsigned short prescaler, unsigned short period);
 
+uint8_t  rec_error = 0;
+uint32_t laser_open_time = 0;
+uint32_t start_tick  = 2;
+
 static __attribute__((section(".data"))) uint8_t power_table_1_6W[]= {
   0,
   20,22,24,26,28,30,31,33,35,37,39,41,43,45,47,49,51,53,54,56,58,60,63,65,67,69,71,73,75,77,79,82,84,86,88,90,93,95,97,
@@ -118,6 +122,8 @@ static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
   laser->fire_sensor_trigger_ = cmd.data[7];
 
   laser->need_to_tell_hmi_ = true;
+
+  rec_error |= laser->security_status_;
 
   if (laser->security_status_ != 0) {
     laser->need_to_turnoff_laser_ = true;
@@ -480,7 +486,7 @@ ErrCode ToolHeadLaser::GetCrossLightCAN(bool &sw) {
   }
 }
 
-ErrCode ToolHeadLaser::SetFireSensorSensitivityCAN(uint16 sen) {
+ErrCode ToolHeadLaser::SetFireSensorSensitivityCAN(uint16 sen, bool is_save) {
   CanStdFuncCmd_t cmd;
   uint8_t buffer[8];
 
@@ -491,13 +497,13 @@ ErrCode ToolHeadLaser::SetFireSensorSensitivityCAN(uint16 sen) {
 
   buffer[0]     = sen & 0xFF;
   buffer[1]     = (sen >> 8) & 0xFF;
+  buffer[2]     = is_save;
   cmd.id        = MODULE_FUNC_SET_FIRE_SENSOR_SENSITIVITY;
   cmd.data      = buffer;
-  cmd.length    = 2;
+  cmd.length    = 3;
 
   return canhost.SendStdCmd(cmd);
 }
-
 ErrCode ToolHeadLaser::GetFireSensorSensitivityCAN(uint16 &sen) {
   CanStdFuncCmd_t cmd;
 
@@ -1131,6 +1137,15 @@ ErrCode ToolHeadLaser::GetSecurityStatus(SSTP_Event_t &event) {
   return canhost.SendStdCmd(cmd);
 }
 
+ErrCode ToolHeadLaser::GetSecurityStatus(void) {
+  CanStdFuncCmd_t cmd;
+
+  cmd.id        = MODULE_FUNC_REPORT_SECURITY_STATUS;
+  cmd.data      = NULL;
+  cmd.length    = 0;
+  return canhost.SendStdCmd(cmd);
+}
+
 ErrCode ToolHeadLaser::SendSecurityStatus() {
   SSTP_Event_t event = {EID_SYS_CTRL_ACK, SYSCTL_OPC_SECURITY_STATUS};
   uint8_t buff[7];
@@ -1400,9 +1415,9 @@ ErrCode ToolHeadLaser::GetCrosslightOffset(SSTP_Event_t &event) {
 
 void ToolHeadLaser::TellSecurityStatus() {
   SendSecurityStatus();
-  SERIAL_ECHO("Laser security state: 0x");
-  SERIAL_PRINTLN(laser->security_status_, HEX);
 
+  LOG_I("laser open %dh %dm %ds, ", laser_open_time / (3600), (laser_open_time % (3600) / 60), (laser_open_time % (3600) % 60));
+  LOG_I("rec_error: 0x%x, fire_err : %d security_status_: 0x%x, ", rec_error, fire_sensor_trigger_, security_status_);
   SERIAL_ECHOLNPAIR("Laser temp: ", laser->laser_temperature_, ", imu temp: ", laser->imu_temperature_, ", roll: ", laser->roll_, ", pitch: ", laser->pitch_, ", pwm_pin_pulldown_state_: ", laser->pwm_pin_pulldown_state_, ", pwm_pin_pullup_state_: ", laser->pwm_pin_pullup_state_);
 }
 
@@ -1455,6 +1470,26 @@ void ToolHeadLaser::Process() {
     if (need_to_tell_hmi_) {
       need_to_tell_hmi_ = false;
       TellSecurityStatus();
+    }
+
+    if (laser_open_time != 0xFFFFFFFF) {
+      laser_open_time++;
+      GetSecurityStatus();
+      // LOG_I("laser open %dh %dm %ds, ", laser_open_time / (3600), (laser_open_time % (3600) / 60), (laser_open_time % (3600) % 60));
+      // LOG_I("rec_error: 0x%x, security_status_: 0x%x, laser_temp: %d, imu_tmp: %d, fire_err : %d\n", rec_error,
+      //       security_status_, laser_temperature_, imu_temperature_, fire_sensor_trigger_);
+    }
+
+    if (start_tick > 0) {
+      LOG_I("****start_tick: %d*****\n", start_tick);
+      start_tick--;
+      if (start_tick == 0) {
+        laser_open_time = 0;
+        if (!security_status_)
+          SetOutput(100);
+        else
+          LOG_W("****security_status_: 0x%x, open laser fail*****\n", security_status_);
+      }
     }
 
     TurnoffLaserIfNeeded();

@@ -144,7 +144,7 @@ class ToolHeadLaser: public ModuleBase {
 
     ErrCode SetCrossLightCAN(bool sw);
     ErrCode GetCrossLightCAN(bool &sw);
-    ErrCode SetFireSensorSensitivityCAN(uint16 sen);
+    ErrCode SetFireSensorSensitivityCAN(uint16 sen, bool is_save=true);
     ErrCode GetFireSensorSensitivityCAN(uint16 &sen);
     ErrCode SetFireSensorReportTime(uint16 itv);
     ErrCode SetCrossLightOffsetCAN(float x, float y);
@@ -164,6 +164,7 @@ class ToolHeadLaser: public ModuleBase {
     void SetCameraLight(uint8_t state);
 
     ErrCode GetSecurityStatus(SSTP_Event_t &event);
+    ErrCode GetSecurityStatus(void);
     ErrCode SendSecurityStatus();
     ErrCode SendPauseStatus();
     ErrCode SetAutoFocusLight(SSTP_Event_t &event);
