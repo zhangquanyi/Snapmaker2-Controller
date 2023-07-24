@@ -37,6 +37,9 @@
 #define FIRE_DETECT_TRIGGER_LIMIT_ADC_VALUE     (4095)
 #define FIRE_DETECT_TRIGGER_DISABLE_ADC_VALUE   (0xFFFF)
 
+#define FIRE_DETECT_ADC_MIN_LIMIT_VALUE   (1500)
+#define FIRE_DETECT_SHAKE_CNT             (5)
+
 enum ToolheadLaserFanState {
   TOOLHEAD_LASER_FAN_STATE_OPEN,
   TOOLHEAD_LASER_FAN_STATE_TO_BE_CLOSED,
@@ -123,6 +126,8 @@ class ToolHeadLaser: public ModuleBase {
       fire_sensor_trigger_ = false;
       crosslight_offset_x = crosslight_offset_y = INVALID_OFFSET;
       half_power_mode_ = false;
+      err_shake_cnt_ = 0;
+      normal_shake_cnt_ = 0;
     }
 
     ErrCode Init(MAC_t &mac, uint8_t mac_index);
@@ -144,7 +149,7 @@ class ToolHeadLaser: public ModuleBase {
 
     ErrCode SetCrossLightCAN(bool sw);
     ErrCode GetCrossLightCAN(bool &sw);
-    ErrCode SetFireSensorSensitivityCAN(uint16 sen);
+    ErrCode SetFireSensorSensitivityCAN(uint16 sen, bool is_save=true);
     ErrCode GetFireSensorSensitivityCAN(uint16 &sen);
     ErrCode SetFireSensorReportTime(uint16 itv);
     ErrCode SetCrossLightOffsetCAN(float x, float y);
@@ -251,6 +256,8 @@ class ToolHeadLaser: public ModuleBase {
     bool cross_light_state_update_;
     bool cross_light_state_;
     bool half_power_mode_;
+    uint32_t err_shake_cnt_;
+    uint32_t normal_shake_cnt_;
 
   // Laser Inline Power functions
   public:

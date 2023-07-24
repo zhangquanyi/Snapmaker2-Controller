@@ -51,6 +51,12 @@ ToolHeadLaser laser_20w(MODULE_DEVICE_ID_20W_LASER);
 ToolHeadLaser laser_40w(MODULE_DEVICE_ID_40W_LASER);
 ToolHeadLaser *laser = &laser_1_6_w;
 
+bool fire_trigger_ = false;
+bool fan_except = false;
+uint16_t err_sta = 0xFF;
+uint32_t check_tick = 0;
+uint8_t  log_level = 1;
+
 extern void Tim1SetCCR4(uint16_t pwm);
 extern uint16_t Tim1GetCCR4();
 extern void Tim1PwmInit(unsigned short prescaler, unsigned short period);
@@ -119,15 +125,15 @@ static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
 
   laser->need_to_tell_hmi_ = true;
 
-  if (laser->security_status_ != 0) {
-    laser->need_to_turnoff_laser_ = true;
+  // if (laser->security_status_ != 0) {
+  //   laser->need_to_turnoff_laser_ = true;
 
-    if (systemservice.GetCurrentStage() == SYSTAGE_WORK || systemservice.GetCurrentStage() == SYSTAGE_PAUSE) {
-      quickstop.Trigger(QS_SOURCE_SECURITY, true);
-    } else if (laser->laser_status_ == LASER_ENABLE) {
-      laser->TurnOff();
-    }
-  }
+  //   if (systemservice.GetCurrentStage() == SYSTAGE_WORK || systemservice.GetCurrentStage() == SYSTAGE_PAUSE) {
+  //     quickstop.Trigger(QS_SOURCE_SECURITY, true);
+  //   } else if (laser->laser_status_ == LASER_ENABLE) {
+  //     laser->TurnOff();
+  //   }
+  // }
 }
 
 static void CallbackAckGetCrossLight(CanStdDataFrame_t &cmd) {
@@ -148,7 +154,29 @@ static void CallbackAckGetCrossLightOffset(CanStdDataFrame_t &cmd) {
 
 static void CallbackAckReportFireSensorRawData(CanStdDataFrame_t &cmd) {
   laser->fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
-  LOG_I("frd: %d\n", laser->fire_sensor_rawdata_);
+  if (laser->fire_sensor_rawdata_ < FIRE_DETECT_ADC_MIN_LIMIT_VALUE) {
+    laser->normal_shake_cnt_ = 0;
+    if (laser->err_shake_cnt_ < FIRE_DETECT_SHAKE_CNT)
+      laser->err_shake_cnt_++;
+
+    if (laser->err_shake_cnt_ >= FIRE_DETECT_SHAKE_CNT) {
+      fire_trigger_ = true;
+    }
+  }
+  else {
+    laser->err_shake_cnt_ = 0;
+    if (laser->normal_shake_cnt_ < FIRE_DETECT_SHAKE_CNT)
+      laser->normal_shake_cnt_++;
+
+    if (laser->normal_shake_cnt_ >= FIRE_DETECT_SHAKE_CNT) {
+      fire_trigger_ = false;
+    }
+
+  }
+
+  if (log_level)
+    LOG_I("frd: %d, fire_trigger_: %d, fan_except: %d, security_status_: %d\n", laser->fire_sensor_rawdata_, fire_trigger_, fan_except, laser->security_status_);
+
 }
 
 
@@ -252,6 +280,12 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
     power_table_ = power_table_40W;
     SetToolhead(MODULE_TOOLHEAD_LASER_40W);
   }
+
+
+  LOG_I("Laser Test firmware!!!\n");
+
+  SetFireSensorReportTime(200);
+  SetFireSensorSensitivityCAN(0xFFFF, false);
 
   return E_SUCCESS;
 }
@@ -480,7 +514,7 @@ ErrCode ToolHeadLaser::GetCrossLightCAN(bool &sw) {
   }
 }
 
-ErrCode ToolHeadLaser::SetFireSensorSensitivityCAN(uint16 sen) {
+ErrCode ToolHeadLaser::SetFireSensorSensitivityCAN(uint16 sen, bool is_save) {
   CanStdFuncCmd_t cmd;
   uint8_t buffer[8];
 
@@ -491,9 +525,10 @@ ErrCode ToolHeadLaser::SetFireSensorSensitivityCAN(uint16 sen) {
 
   buffer[0]     = sen & 0xFF;
   buffer[1]     = (sen >> 8) & 0xFF;
+  buffer[2]     = is_save;
   cmd.id        = MODULE_FUNC_SET_FIRE_SENSOR_SENSITIVITY;
   cmd.data      = buffer;
-  cmd.length    = 2;
+  cmd.length    = 3;
 
   return canhost.SendStdCmd(cmd);
 }
@@ -1231,7 +1266,8 @@ ErrCode ToolHeadLaser::LaserControl(uint8_t state) {
   CanStdFuncCmd_t cmd;
   uint8_t can_buffer[1];
 
-  can_buffer[0] = state;
+  // can_buffer[0] = state;
+  can_buffer[0] = 0;               // does not enable the power supply to prevent the laser from being turned on
   cmd.id        = MODULE_FUNC_LASER_CTRL;
   cmd.data      = can_buffer;
   cmd.length    = 1;
@@ -1436,6 +1472,28 @@ void ToolHeadLaser::Process() {
   if (mac_index_ == MODULE_MAC_INDEX_INVALID)
     return;
 
+  if (laser->security_status_ || fire_trigger_) {
+    if (!err_sta || err_sta == 0xFF) {
+      err_sta = 1;
+      SetFanPower(0);
+      SetCrossLightCAN(false);
+    }
+
+    if (laser->security_status_ & (1 << 4)) {
+      fan_except = true;
+    }
+  }
+  else {
+    if (!fan_except && !laser->security_status_ && !fire_trigger_) {
+      if (err_sta || err_sta == 0xFF) {
+        err_sta = 0;
+        SetFanPower(255);
+        SetCrossLightCAN(true);
+      }
+    }
+  }
+
+
   if (++timer_in_process_ < 100) return;
   timer_in_process_ = 0;
 
@@ -1460,7 +1518,7 @@ void ToolHeadLaser::Process() {
     TurnoffLaserIfNeeded();
   }
 
-  TryCloseFan();
+  // TryCloseFan();
 }
 
 
