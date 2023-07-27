@@ -38,7 +38,7 @@
   /**
    * Marlin release version identifier
    */
-  #define SHORT_BUILD_VERSION "SM2-4.5.37"
+  #define SHORT_BUILD_VERSION "SM2-4.5.37-0727-FT"
 
   /**
    * Verbose version identifier which should contain a reference to the location
