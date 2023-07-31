@@ -259,6 +259,12 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
     SetToolhead(MODULE_TOOLHEAD_LASER_40W);
   }
 
+  if (laser->device_id_ == MODULE_DEVICE_ID_20W_LASER)
+    LOG_I("Laser 20w Test firmware!!!\n");
+
+  if (laser->device_id_ == MODULE_DEVICE_ID_40W_LASER)
+    LOG_I("Laser 40w Test firmware!!!\n");
+
   return E_SUCCESS;
 }
 
