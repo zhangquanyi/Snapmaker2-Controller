@@ -56,6 +56,7 @@ bool fan_except = false;
 uint16_t err_sta = 0xFF;
 uint32_t check_tick = 0;
 uint8_t  log_level = 1;
+uint8_t temp_err_bit = 0;
 
 extern void Tim1SetCCR4(uint16_t pwm);
 extern uint16_t Tim1GetCCR4();
@@ -125,6 +126,16 @@ static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
 
   laser->need_to_tell_hmi_ = true;
 
+  if (laser->imu_temperature_ < 0)
+    temp_err_bit |= (1 << 0);
+  else
+    temp_err_bit &= (~(1 << 0));
+
+  if (laser->laser_temperature_ < 0)
+    temp_err_bit |= (1 << 1);
+  else
+    temp_err_bit &= (~(1 << 1));
+
   // if (laser->security_status_ != 0) {
   //   laser->need_to_turnoff_laser_ = true;
 
@@ -175,7 +186,7 @@ static void CallbackAckReportFireSensorRawData(CanStdDataFrame_t &cmd) {
   }
 
   if (log_level)
-    LOG_I("frd: %d, fire_trigger_: %d, fan_except: %d, security_status_: %d\n", laser->fire_sensor_rawdata_, fire_trigger_, fan_except, laser->security_status_);
+    LOG_I("frd: %d, fire_trigger_: %d, fan_except: %d, security_status_: %d, temp_err_bit: %d\n", laser->fire_sensor_rawdata_, fire_trigger_, fan_except, laser->security_status_, temp_err_bit);
 
 }
 
@@ -1475,7 +1486,7 @@ void ToolHeadLaser::Process() {
   if (mac_index_ == MODULE_MAC_INDEX_INVALID)
     return;
 
-  if (laser->security_status_ || fire_trigger_) {
+  if (laser->security_status_ || fire_trigger_ || temp_err_bit) {
     if (!err_sta || err_sta == 0xFF) {
       err_sta = 1;
       SetFanPower(0);
@@ -1487,7 +1498,7 @@ void ToolHeadLaser::Process() {
     }
   }
   else {
-    if (!fan_except && !laser->security_status_ && !fire_trigger_) {
+    if (!fan_except && !laser->security_status_ && !fire_trigger_ && !temp_err_bit) {
       if (err_sta || err_sta == 0xFF) {
         err_sta = 0;
         SetFanPower(255);
