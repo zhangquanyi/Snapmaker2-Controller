@@ -37,6 +37,8 @@
 #define FIRE_DETECT_TRIGGER_LIMIT_ADC_VALUE     (4095)
 #define FIRE_DETECT_TRIGGER_DISABLE_ADC_VALUE   (0xFFFF)
 
+#define LASER_AGING_INDEX_MAX      6
+
 enum ToolheadLaserFanState {
   TOOLHEAD_LASER_FAN_STATE_OPEN,
   TOOLHEAD_LASER_FAN_STATE_TO_BE_CLOSED,
@@ -141,6 +143,10 @@ class ToolHeadLaser: public ModuleBase {
 
     void TryCloseFan();
     bool IsOnline(uint8_t sub_index = 0) { return mac_index_ != MODULE_MAC_INDEX_INVALID; }
+    void OpenAllLaser(void);
+    void CloseAllLaser(void);
+    void SetLaserOutputPinSta(bool sta, uint8_t index=0xFF);
+    void SetLaserDirCheckPinSta(bool sta, uint8_t index=0xFF);
 
     ErrCode SetCrossLightCAN(bool sw);
     ErrCode GetCrossLightCAN(bool &sw);
@@ -150,6 +156,7 @@ class ToolHeadLaser: public ModuleBase {
     ErrCode SetCrossLightOffsetCAN(float x, float y);
     ErrCode GetCrossLightOffsetCAN(float &x, float &y);
     ErrCode CheckCrossLightOffset(float x_offset, float y_offset);
+    ErrCode LaserControlEx(uint8_t state);
 
     // callbacks for HMI event
     ErrCode GetFocus(SSTP_Event_t &event);
@@ -252,6 +259,8 @@ class ToolHeadLaser: public ModuleBase {
     bool cross_light_state_update_;
     bool cross_light_state_;
     bool half_power_mode_;
+    uint8_t module_index_ = 0xFF;
+    uint8_t port_index_ = 0xFF;
 
   // Laser Inline Power functions
   public:

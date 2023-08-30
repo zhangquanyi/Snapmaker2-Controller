@@ -327,16 +327,22 @@ void ModuleBase::SetToolhead(ModuleToolHeadType toolhead) {
 }
 
 
+extern ToolHeadLaser laser_array[LASER_AGING_INDEX_MAX];
+extern uint8_t  laser_init_total;
+extern ToolHeadLaser *laser;
+
 void ModuleBase::StaticProcess() {
-  laser_1_6_w.Process();
+  // laser_1_6_w.Process();
   enclosure.Process();
   emergency_stop.Process();
   purifier.Process();
   printer_single.Process();
   printer_dualextruder.Process();
-  laser_10w.Process();
-  laser_20w.Process();
-  laser_40w.Process();
+  // laser_10w.Process();
+  // laser_20w.Process();
+  // laser_40w.Process();
+
+  laser->Process();
 
   if (++timer_in_static_process_ < 100) return;
   timer_in_static_process_ = 0;

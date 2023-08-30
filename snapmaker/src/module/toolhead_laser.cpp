@@ -45,19 +45,58 @@
 #define TimSetPwm(n)  Tim1SetCCR4(n)
 #define TimGetPwm()  Tim1GetCCR4()
 
+
 ToolHeadLaser laser_1_6_w(MODULE_DEVICE_ID_1_6_W_LASER);
 ToolHeadLaser laser_10w(MODULE_DEVICE_ID_10W_LASER);
 ToolHeadLaser laser_20w(MODULE_DEVICE_ID_20W_LASER);
 ToolHeadLaser laser_40w(MODULE_DEVICE_ID_40W_LASER);
 ToolHeadLaser *laser = &laser_1_6_w;
+ToolHeadLaser laser_array[LASER_AGING_INDEX_MAX] = {MODULE_DEVICE_ID_40W_LASER, MODULE_DEVICE_ID_40W_LASER, MODULE_DEVICE_ID_40W_LASER, MODULE_DEVICE_ID_40W_LASER,
+                                                      MODULE_DEVICE_ID_40W_LASER, MODULE_DEVICE_ID_40W_LASER};
+
+// int8_t laser_dir_pin[LASER_AGING_INDEX_MAX] = {E0_DIR_PIN, E1_DIR_PIN, X_DIR_PIN, Y_DIR_PIN, Z_DIR_PIN, B_DIR_PIN};
+uint8_t  laser_init_total = 0;
+uint8_t  rec_error[LASER_AGING_INDEX_MAX] = {0, 0, 0, 0, 0, 0};
+uint8_t  mc_port[LASER_AGING_INDEX_MAX] = {0, 0, 0, 0, 0, 0};
+uint32_t laser_open_time = 0;
+uint32_t start_tick  = 3;
+char port_info_str[LASER_AGING_INDEX_MAX][5] = {{"E0"}, {"E1"}, {"X "}, {"Y "}, {"Z "}, {"B "}};
+
+static void CallbackAckReportSecurityIndex1(CanStdDataFrame_t &cmd);
+static void CallbackAckReportSecurityIndex2(CanStdDataFrame_t &cmd);
+static void CallbackAckReportSecurityIndex3(CanStdDataFrame_t &cmd);
+static void CallbackAckReportSecurityIndex4(CanStdDataFrame_t &cmd);
+static void CallbackAckReportSecurityIndex5(CanStdDataFrame_t &cmd);
+static void CallbackAckReportSecurityIndex6(CanStdDataFrame_t &cmd);
+static void CallbackAckReportFireSensorRawDataIndex1(CanStdDataFrame_t &cmd);
+static void CallbackAckReportFireSensorRawDataIndex2(CanStdDataFrame_t &cmd);
+static void CallbackAckReportFireSensorRawDataIndex3(CanStdDataFrame_t &cmd);
+static void CallbackAckReportFireSensorRawDataIndex4(CanStdDataFrame_t &cmd);
+static void CallbackAckReportFireSensorRawDataIndex5(CanStdDataFrame_t &cmd);
+static void CallbackAckReportFireSensorRawDataIndex6(CanStdDataFrame_t &cmd);
+
+
+static void (*call_back_report_security_array[LASER_AGING_INDEX_MAX])(CanStdDataFrame_t &cmd) = {
+  CallbackAckReportSecurityIndex1,
+  CallbackAckReportSecurityIndex2,
+  CallbackAckReportSecurityIndex3,
+  CallbackAckReportSecurityIndex4,
+  CallbackAckReportSecurityIndex5,
+  CallbackAckReportSecurityIndex6
+};
+
+static void (*call_back_report_fire_sensor_rawdata_array[LASER_AGING_INDEX_MAX])(CanStdDataFrame_t &cmd) = {
+  CallbackAckReportFireSensorRawDataIndex1,
+  CallbackAckReportFireSensorRawDataIndex2,
+  CallbackAckReportFireSensorRawDataIndex3,
+  CallbackAckReportFireSensorRawDataIndex4,
+  CallbackAckReportFireSensorRawDataIndex5,
+  CallbackAckReportFireSensorRawDataIndex6
+};
 
 extern void Tim1SetCCR4(uint16_t pwm);
 extern uint16_t Tim1GetCCR4();
 extern void Tim1PwmInit(unsigned short prescaler, unsigned short period);
-
-uint8_t  rec_error = 0;
-uint32_t laser_open_time = 0;
-uint32_t start_tick  = 2;
 
 static __attribute__((section(".data"))) uint8_t power_table_1_6W[]= {
   0,
@@ -109,78 +148,304 @@ static __attribute__((section(".data"))) uint8_t power_table_40W[]= {
   255
 };
 
-static void CallbackAckLaserFocus(CanStdDataFrame_t &cmd) {
-  laser->focus(cmd.data[0]<<8 | cmd.data[1]);
+// static void CallbackAckLaserFocus(CanStdDataFrame_t &cmd) {
+//   laser->focus(cmd.data[0]<<8 | cmd.data[1]);
+// }
+
+// static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
+//   laser->security_status_ = cmd.data[0];
+//   laser->pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+//   laser->roll_ = (cmd.data[3] << 8) | cmd.data[4];
+//   laser->laser_temperature_ = cmd.data[5];
+//   laser->imu_temperature_ = (int8_t)cmd.data[6];
+//   laser->fire_sensor_trigger_ = cmd.data[7];
+
+//   laser->need_to_tell_hmi_ = true;
+
+//   rec_error |= laser->security_status_;
+
+//   if (laser->security_status_ != 0) {
+//     laser->need_to_turnoff_laser_ = true;
+
+//     if (systemservice.GetCurrentStage() == SYSTAGE_WORK || systemservice.GetCurrentStage() == SYSTAGE_PAUSE) {
+//       quickstop.Trigger(QS_SOURCE_SECURITY, true);
+//     } else if (laser->laser_status_ == LASER_ENABLE) {
+//       laser->TurnOff();
+//     }
+//   }
+// }
+
+static void CallbackAckReportSecurityIndex1(CanStdDataFrame_t &cmd) {
+  uint8_t index_ = 0;
+  laser_array[index_].security_status_ = cmd.data[0];
+  laser_array[index_].pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+  laser_array[index_].roll_ = (cmd.data[3] << 8) | cmd.data[4];
+  laser_array[index_].laser_temperature_ = cmd.data[5];
+  laser_array[index_].imu_temperature_ = (int8_t)cmd.data[6];
+  laser_array[index_].fire_sensor_trigger_ = cmd.data[7];
+
+  if (laser_init_total == index_ + 1)
+    laser->need_to_tell_hmi_ = true;
+
+  rec_error[index_] |= laser_array[index_].security_status_;
+
+  if (laser_array[index_].laser_temperature_ < 0 || laser_array[index_].imu_temperature_ < 0) {
+    rec_error[index_] |= (1 << 6);
+  }
+
+  // LOG_I("module%d: mac:0x%x security_status_: 0x%x imu_temp: %d, laser_temp: %d\n", index_, laser_array[index_].mac(),laser_array[index_].security_status_, laser_array[index_].imu_temperature_, laser_array[index_].laser_temperature_);
+
+  // if (laser_array[index_].security_status_ != 0) {
+  //   laser->need_to_turnoff_laser_ = true;
+
+  //   if (systemservice.GetCurrentStage() == SYSTAGE_WORK || systemservice.GetCurrentStage() == SYSTAGE_PAUSE) {
+  //     quickstop.Trigger(QS_SOURCE_SECURITY, true);
+  //   } else if (laser->laser_status_ == LASER_ENABLE) {
+  //     laser->TurnOff();
+  //   }
+  // }
 }
 
-static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
-  laser->security_status_ = cmd.data[0];
-  laser->pitch_ = (cmd.data[1] << 8) | cmd.data[2];
-  laser->roll_ = (cmd.data[3] << 8) | cmd.data[4];
-  laser->laser_temperature_ = cmd.data[5];
-  laser->imu_temperature_ = (int8_t)cmd.data[6];
-  laser->fire_sensor_trigger_ = cmd.data[7];
+static void CallbackAckReportSecurityIndex2(CanStdDataFrame_t &cmd) {
+  uint8_t index_ = 1;
+  laser_array[index_].security_status_ = cmd.data[0];
+  laser_array[index_].pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+  laser_array[index_].roll_ = (cmd.data[3] << 8) | cmd.data[4];
+  laser_array[index_].laser_temperature_ = cmd.data[5];
+  laser_array[index_].imu_temperature_ = (int8_t)cmd.data[6];
+  laser_array[index_].fire_sensor_trigger_ = cmd.data[7];
 
-  laser->need_to_tell_hmi_ = true;
+  if (laser_init_total == index_ + 1)
+    laser->need_to_tell_hmi_ = true;
 
-  rec_error |= laser->security_status_;
+  rec_error[index_] |= laser_array[index_].security_status_;
 
-  if (laser->security_status_ != 0) {
-    laser->need_to_turnoff_laser_ = true;
+  if (laser_array[index_].laser_temperature_ < 0 || laser_array[index_].imu_temperature_ < 0) {
+    rec_error[index_] |= (1 << 6);
+  }
 
-    if (systemservice.GetCurrentStage() == SYSTAGE_WORK || systemservice.GetCurrentStage() == SYSTAGE_PAUSE) {
-      quickstop.Trigger(QS_SOURCE_SECURITY, true);
-    } else if (laser->laser_status_ == LASER_ENABLE) {
-      laser->TurnOff();
-    }
+  // LOG_I("module%d: mac:0x%x security_status_: 0x%x imu_temp: %d, laser_temp: %d\n", index_, laser_array[index_].mac(),laser_array[index_].security_status_, laser_array[index_].imu_temperature_, laser_array[index_].laser_temperature_);
+}
+
+static void CallbackAckReportSecurityIndex3(CanStdDataFrame_t &cmd) {
+  uint8_t index_ = 2;
+  laser_array[index_].security_status_ = cmd.data[0];
+  laser_array[index_].pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+  laser_array[index_].roll_ = (cmd.data[3] << 8) | cmd.data[4];
+  laser_array[index_].laser_temperature_ = cmd.data[5];
+  laser_array[index_].imu_temperature_ = (int8_t)cmd.data[6];
+  laser_array[index_].fire_sensor_trigger_ = cmd.data[7];
+
+  if (laser_init_total == index_ + 1)
+    laser->need_to_tell_hmi_ = true;
+
+  rec_error[index_] |= laser_array[index_].security_status_;
+
+  if (laser_array[index_].laser_temperature_ < 0 || laser_array[index_].imu_temperature_ < 0) {
+    rec_error[index_] |= (1 << 6);
+  }
+
+  // LOG_I("module%d: mac:0x%x security_status_: 0x%x imu_temp: %d, laser_temp: %d\n", index_, laser_array[index_].mac(),laser_array[index_].security_status_, laser_array[index_].imu_temperature_, laser_array[index_].laser_temperature_);
+}
+
+static void CallbackAckReportSecurityIndex4(CanStdDataFrame_t &cmd) {
+  uint8_t index_ = 3;
+  laser_array[index_].security_status_ = cmd.data[0];
+  laser_array[index_].pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+  laser_array[index_].roll_ = (cmd.data[3] << 8) | cmd.data[4];
+  laser_array[index_].laser_temperature_ = cmd.data[5];
+  laser_array[index_].imu_temperature_ = (int8_t)cmd.data[6];
+  laser_array[index_].fire_sensor_trigger_ = cmd.data[7];
+
+  if (laser_init_total == index_ + 1)
+    laser->need_to_tell_hmi_ = true;
+
+  rec_error[index_] |= laser_array[index_].security_status_;
+
+  if (laser_array[index_].laser_temperature_ < 0 || laser_array[index_].imu_temperature_ < 0) {
+    rec_error[index_] |= (1 << 6);
+  }
+
+  // LOG_I("module%d: mac:0x%x security_status_: 0x%x imu_temp: %d, laser_temp: %d\n", index_, laser_array[index_].mac(),laser_array[index_].security_status_, laser_array[index_].imu_temperature_, laser_array[index_].laser_temperature_);
+}
+
+static void CallbackAckReportSecurityIndex5(CanStdDataFrame_t &cmd) {
+  uint8_t index_ = 4;
+  laser_array[index_].security_status_ = cmd.data[0];
+  laser_array[index_].pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+  laser_array[index_].roll_ = (cmd.data[3] << 8) | cmd.data[4];
+  laser_array[index_].laser_temperature_ = cmd.data[5];
+  laser_array[index_].imu_temperature_ = (int8_t)cmd.data[6];
+  laser_array[index_].fire_sensor_trigger_ = cmd.data[7];
+
+  if (laser_init_total == index_ + 1)
+    laser->need_to_tell_hmi_ = true;
+
+  rec_error[index_] |= laser_array[index_].security_status_;
+
+  if (laser_array[index_].laser_temperature_ < 0 || laser_array[index_].imu_temperature_ < 0) {
+    rec_error[index_] |= (1 << 6);
+  }
+
+  // LOG_I("module%d: mac:0x%x security_status_: 0x%x imu_temp: %d, laser_temp: %d\n", index_, laser_array[index_].mac(),laser_array[index_].security_status_, laser_array[index_].imu_temperature_, laser_array[index_].laser_temperature_);
+}
+
+static void CallbackAckReportSecurityIndex6(CanStdDataFrame_t &cmd) {
+  uint8_t index_ = 5;
+  laser_array[index_].security_status_ = cmd.data[0];
+  laser_array[index_].pitch_ = (cmd.data[1] << 8) | cmd.data[2];
+  laser_array[index_].roll_ = (cmd.data[3] << 8) | cmd.data[4];
+  laser_array[index_].laser_temperature_ = cmd.data[5];
+  laser_array[index_].imu_temperature_ = (int8_t)cmd.data[6];
+  laser_array[index_].fire_sensor_trigger_ = cmd.data[7];
+
+  if (laser_init_total == index_ + 1)
+    laser->need_to_tell_hmi_ = true;
+
+  rec_error[index_] |= laser_array[index_].security_status_;
+
+  if (laser_array[index_].laser_temperature_ < 0 || laser_array[index_].imu_temperature_ < 0) {
+    rec_error[index_] |= (1 << 6);
+  }
+
+  // LOG_I("module%d: mac:0x%x security_status_: 0x%x imu_temp: %d, laser_temp: %d\n", index_, laser_array[index_].mac(),laser_array[index_].security_status_, laser_array[index_].imu_temperature_, laser_array[index_].laser_temperature_);
+}
+
+// static void CallbackAckGetCrossLight(CanStdDataFrame_t &cmd) {
+//   laser->cross_light_state_ = cmd.data[0];
+//   laser->cross_light_state_update_ = true;
+// }
+
+// static void CallbackAckGetFireSensorSensitivity(CanStdDataFrame_t &cmd) {
+//   laser->fire_sensor_trigger_value_ = cmd.data[0] | (cmd.data[1] << 8);
+//   laser->fire_sensor_sensitivity_update_ = true;
+// }
+
+// static void CallbackAckGetCrossLightOffset(CanStdDataFrame_t &cmd) {
+//   laser->crosslight_offset_x = *(float *)(&cmd.data[0]);
+//   laser->crosslight_offset_y = *(float *)(&cmd.data[4]);
+//   laser->crosslight_offset_update_ = true;
+// }
+
+// static void CallbackAckReportFireSensorRawData(CanStdDataFrame_t &cmd) {
+//   laser->fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+//   LOG_I("frd: %d\n", laser->fire_sensor_rawdata_);
+// }
+
+
+static void CallbackAckReportFireSensorRawDataIndex1(CanStdDataFrame_t &cmd) {
+  laser_array[0].fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+  LOG_I("frd0: %d\n", laser_array[0].fire_sensor_rawdata_);
+}
+
+static void CallbackAckReportFireSensorRawDataIndex2(CanStdDataFrame_t &cmd) {
+  laser_array[1].fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+  LOG_I("frd1: %d\n", laser_array[0].fire_sensor_rawdata_);
+}
+
+static void CallbackAckReportFireSensorRawDataIndex3(CanStdDataFrame_t &cmd) {
+  laser_array[2].fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+  LOG_I("frd2: %d\n", laser_array[0].fire_sensor_rawdata_);
+}
+
+static void CallbackAckReportFireSensorRawDataIndex4(CanStdDataFrame_t &cmd) {
+  laser_array[3].fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+  LOG_I("frd3: %d\n", laser_array[0].fire_sensor_rawdata_);
+}
+
+static void CallbackAckReportFireSensorRawDataIndex5(CanStdDataFrame_t &cmd) {
+  laser_array[4].fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+  LOG_I("frd4: %d\n", laser_array[0].fire_sensor_rawdata_);
+}
+
+static void CallbackAckReportFireSensorRawDataIndex6(CanStdDataFrame_t &cmd) {
+  laser_array[5].fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
+  LOG_I("frd5: %d\n", laser_array[0].fire_sensor_rawdata_);
+}
+
+
+void ToolHeadLaser::SetLaserOutputPinSta(bool sta, uint8_t index) {
+  int8_t laser_power_pin[LASER_AGING_INDEX_MAX] = {E0_STEP_PIN, E1_STEP_PIN, X_STEP_PIN, Y_STEP_PIN, Z_STEP_PIN, B_STEP_PIN};
+  if (index < LASER_AGING_INDEX_MAX) {
+    OUT_WRITE(laser_power_pin[index], sta);
+  }
+  else {
+    for (uint8_t i = 0; i < LASER_AGING_INDEX_MAX; i++)
+      OUT_WRITE(laser_power_pin[i], sta);
   }
 }
 
-static void CallbackAckGetCrossLight(CanStdDataFrame_t &cmd) {
-  laser->cross_light_state_ = cmd.data[0];
-  laser->cross_light_state_update_ = true;
-}
-
-static void CallbackAckGetFireSensorSensitivity(CanStdDataFrame_t &cmd) {
-  laser->fire_sensor_trigger_value_ = cmd.data[0] | (cmd.data[1] << 8);
-  laser->fire_sensor_sensitivity_update_ = true;
-}
-
-static void CallbackAckGetCrossLightOffset(CanStdDataFrame_t &cmd) {
-  laser->crosslight_offset_x = *(float *)(&cmd.data[0]);
-  laser->crosslight_offset_y = *(float *)(&cmd.data[4]);
-  laser->crosslight_offset_update_ = true;
-}
-
-static void CallbackAckReportFireSensorRawData(CanStdDataFrame_t &cmd) {
-  laser->fire_sensor_rawdata_ = cmd.data[0] | (cmd.data[1]<<8);
-  LOG_I("frd: %d\n", laser->fire_sensor_rawdata_);
+void ToolHeadLaser::SetLaserDirCheckPinSta(bool sta, uint8_t index) {
+  int8_t laser_dir_pin[LASER_AGING_INDEX_MAX] = {E0_DIR_PIN, E1_DIR_PIN, X_DIR_PIN, Y_DIR_PIN, Z_DIR_PIN, B_DIR_PIN};
+  if (index < LASER_AGING_INDEX_MAX) {
+    OUT_WRITE(laser_dir_pin[index], sta);
+  }
+  else {
+    for (uint8_t i = 0; i < LASER_AGING_INDEX_MAX; i++)
+      OUT_WRITE(laser_dir_pin[i], sta);
+  }
 }
 
 
 ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
   ErrCode ret;
-
   CanExtCmd_t cmd;
   uint8_t     func_buffer[2*32+2];
 
   Function_t    function;
   message_id_t  message_id[32];
+  uint16_t get_dev_id = MODULE_GET_DEVICE_ID(mac.val);
+  // uint8_t port_index = 0;
 
-  LOG_I("\tGot toolhead Laser!\n");
+  LOG_I("\tGot toolhead Laser!!!  dev_id: %d, mac_index: %d\n", get_dev_id, mac_index);
 
-  if (axis_to_port[E_AXIS] != PORT_8PIN_1) {
-    LOG_E("toolhead Laser failed: Please use the <M1029 E1> set E port\n");
-    return E_HARDWARE;
-  }
+  // if (axis_to_port[E_AXIS] != PORT_8PIN_1) {
+  //   LOG_E("toolhead Laser failed: Please use the <M1029 E1> set E port\n");
+  //   return E_HARDWARE;
+  // }
 
-  ret = ModuleBase::InitModule8p(mac, E0_DIR_PIN, 0);
-  if (ret != E_SUCCESS)
-    return ret;
+  // ret = ModuleBase::InitModule8p(mac, E0_DIR_PIN, 0);
+  // if (ret != E_SUCCESS)
+  //   return ret;
 
   // we have configured Laser in same port
-  if (mac_index_ != MODULE_MAC_INDEX_INVALID)
+  // if (mac_index_ != MODULE_MAC_INDEX_INVALID)
+  //   return E_SAME_STATE;
+
+  if (laser_init_total >= LASER_AGING_INDEX_MAX) {
+    LOG_E("laser_init_total: %d, init failed\n", laser_init_total);
     return E_SAME_STATE;
+  }
+
+  if (!laser_init_total) {
+    SetLaserOutputPinSta(true);
+  }
+
+  vTaskDelay(10);
+
+  int8_t laser_dir_pin[LASER_AGING_INDEX_MAX] = {E0_DIR_PIN, E1_DIR_PIN, X_DIR_PIN, Y_DIR_PIN, Z_DIR_PIN, B_DIR_PIN};
+  uint8_t tmp_port_index = 0xFF;
+  for (uint8_t i = 0; i < LASER_AGING_INDEX_MAX; i++) {
+    SetLaserDirCheckPinSta(LOW);
+    if (mc_port[i] == 0) {
+      ret = ModuleBase::InitModule8p(mac, laser_dir_pin[i], 0);
+      if (ret == E_SUCCESS) {
+        mc_port[i] = 1;
+        tmp_port_index = i;
+        LOG_I("!!!!!!!!find port_index: %d!!!!!!!!!\n", tmp_port_index);
+        break;
+      }
+    }
+  }
+
+  if (tmp_port_index == 0xFF) {
+    LOG_E("laser init: dir test fail!!!\n");
+    // return E_HARDWARE;
+  }
+
+  laser_array[laser_init_total].device_id(get_dev_id);
+  laser_array[laser_init_total].port_index_ = tmp_port_index;
+  LOG_I("laser mode%d init, mac: 0x%x, dev_id: %d\n", laser_init_total, mac.val, get_dev_id);
 
   cmd.mac    = mac;
   cmd.data   = func_buffer;
@@ -194,76 +459,155 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
 
   function.channel   = mac.bits.channel;
   function.mac_index = mac_index;
-  function.sub_index = 0;
+  function.sub_index = laser_init_total;
   function.priority  = MODULE_FUNC_PRIORITY_DEFAULT;
 
-  // register function ids to can host, it will assign message id
   for (int i = 0; i < cmd.data[MODULE_EXT_CMD_INDEX_DATA]; i++) {
     function.id = (cmd.data[i*2 + 2]<<8 | cmd.data[i*2 + 3]);
-    if (function.id == MODULE_FUNC_GET_LASER_FOCUS) {
+    /*if (function.id == MODULE_FUNC_GET_LASER_FOCUS) {
       message_id[i]     = canhost.RegisterFunction(function, CallbackAckLaserFocus);
       msg_id_get_focus_ = message_id[i];
     }
-    else if (function.id == MODULE_FUNC_REPORT_SECURITY_STATUS) {
-      message_id[i] = canhost.RegisterFunction(function, CallbackAckReportSecurity);
+    else */if (function.id == MODULE_FUNC_REPORT_SECURITY_STATUS) {
+      message_id[i] = canhost.RegisterFunction(function, call_back_report_security_array[laser_init_total]);
     }
-    else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_STATE) {
-      message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLight);
-    }
-    else if (function.id == MODULE_FUNC_GET_FIRE_SENSOR_SENSITIVITY) {
-      message_id[i] = canhost.RegisterFunction(function, CallbackAckGetFireSensorSensitivity);
-    }
-    else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_OFFSET) {
-      message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLightOffset);
-    }
+    // else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_STATE) {
+    //   message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLight);
+    // }
+    // else if (function.id == MODULE_FUNC_GET_FIRE_SENSOR_SENSITIVITY) {
+    //   message_id[i] = canhost.RegisterFunction(function, CallbackAckGetFireSensorSensitivity);
+    // }
+    // else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_OFFSET) {
+    //   message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLightOffset);
+    // }
     else if (function.id == MODULE_FUNC_REPORT_FIRE_SENSOR_RAWDATA) {
-      message_id[i] = canhost.RegisterFunction(function, CallbackAckReportFireSensorRawData);
+      message_id[i] = canhost.RegisterFunction(function, call_back_report_fire_sensor_rawdata_array[laser_init_total]);
     }
     else {
       message_id[i] = canhost.RegisterFunction(function, NULL);
     }
-
-    if (function.id == MODULE_FUNC_SET_FAN1)
-      msg_id_set_fan_ = message_id[i];
   }
+
+  // register function ids to can host, it will assign message id
+  // for (int i = 0; i < cmd.data[MODULE_EXT_CMD_INDEX_DATA]; i++) {
+  //   function.id = (cmd.data[i*2 + 2]<<8 | cmd.data[i*2 + 3]);
+  //   if (function.id == MODULE_FUNC_GET_LASER_FOCUS) {
+  //     message_id[i]     = canhost.RegisterFunction(function, CallbackAckLaserFocus);
+  //     msg_id_get_focus_ = message_id[i];
+  //   }
+  //   else if (function.id == MODULE_FUNC_REPORT_SECURITY_STATUS) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckReportSecurity);
+  //   }
+  //   else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_STATE) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLight);
+  //   }
+  //   else if (function.id == MODULE_FUNC_GET_FIRE_SENSOR_SENSITIVITY) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckGetFireSensorSensitivity);
+  //   }
+  //   else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_OFFSET) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLightOffset);
+  //   }
+  //   else if (function.id == MODULE_FUNC_REPORT_FIRE_SENSOR_RAWDATA) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckReportFireSensorRawData);
+  //   }
+  //   else {
+  //     message_id[i] = canhost.RegisterFunction(function, NULL);
+  //   }
+
+  //   if (function.id == MODULE_FUNC_SET_FAN1)
+  //     msg_id_set_fan_ = message_id[i];
+  // }
+
+  // register function ids to can host, it will assign message id
+  // for (int i = 0; i < cmd.data[MODULE_EXT_CMD_INDEX_DATA]; i++) {
+  //   function.id = (cmd.data[i*2 + 2]<<8 | cmd.data[i*2 + 3]);
+  //   if (function.id == MODULE_FUNC_GET_LASER_FOCUS) {
+  //     message_id[i]     = canhost.RegisterFunction(function, CallbackAckLaserFocus);
+  //     msg_id_get_focus_ = message_id[i];
+  //   }
+  //   else if (function.id == MODULE_FUNC_REPORT_SECURITY_STATUS) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckReportSecurity);
+  //   }
+  //   else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_STATE) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLight);
+  //   }
+  //   else if (function.id == MODULE_FUNC_GET_FIRE_SENSOR_SENSITIVITY) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckGetFireSensorSensitivity);
+  //   }
+  //   else if (function.id == MODULE_FUNC_GET_CROSSLIGHT_OFFSET) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckGetCrossLightOffset);
+  //   }
+  //   else if (function.id == MODULE_FUNC_REPORT_FIRE_SENSOR_RAWDATA) {
+  //     message_id[i] = canhost.RegisterFunction(function, CallbackAckReportFireSensorRawData);
+  //   }
+  //   else {
+  //     message_id[i] = canhost.RegisterFunction(function, NULL);
+  //   }
+
+  //   if (function.id == MODULE_FUNC_SET_FAN1)
+  //     msg_id_set_fan_ = message_id[i];
+  // }
 
   ret = canhost.BindMessageID(cmd, message_id);
 
-  if (MODULE_DEVICE_ID_10W_LASER == device_id() || MODULE_DEVICE_ID_1_6_W_LASER == device_id()) {
-    Tim1PwmInit(1862, 255);     // 1.6w & 10w, no modification of the old laser control frequency for the time being  // 250Hz
-    esp32_.Init(&MSerial3, EXECUTOR_SERIAL_IRQ_PRIORITY);
-  }
-  else {
-    Tim1PwmInit(93, 255);       // 5kHz
+  if (ret != E_SUCCESS) {
+    LOG_E("laser init BindMessageID fail\n");
+    return ret;
   }
 
-  mac_index_ = mac_index;
-  state_     = TOOLHEAD_LASER_STATE_OFF;
+  // if (MODULE_DEVICE_ID_10W_LASER == device_id() || MODULE_DEVICE_ID_1_6_W_LASER == device_id()) {
+  //   Tim1PwmInit(1862, 255);     // 1.6w & 10w, no modification of the old laser control frequency for the time being  // 250Hz
+  //   esp32_.Init(&MSerial3, EXECUTOR_SERIAL_IRQ_PRIORITY);
+  // }
+  // else {
+  //   Tim1PwmInit(93, 255);       // 5kHz
+  // }
 
-  laser = this;
+  // mac_index_ = mac_index;
+  // state_     = TOOLHEAD_LASER_STATE_OFF;
+
+  laser_array[laser_init_total].mac_index_ = mac_index;
+  laser_array[laser_init_total].state_ = state_;
+
+  // laser = this;
   // set toolhead
-  power_table_ = power_table_1_6W;
+  // power_table_ = power_table_1_6W;
+  // if (laser->device_id_ == MODULE_DEVICE_ID_1_6_W_LASER) {
+  //   power_table_ = power_table_1_6W;
+  //   SetToolhead(MODULE_TOOLHEAD_LASER);
+  // } else if (laser->device_id_ == MODULE_DEVICE_ID_10W_LASER) {
+  //   power_table_ = power_table_10W;
+  //   SetToolhead(MODULE_TOOLHEAD_LASER_10W);
+  // }
+  // else if (laser->device_id_ == MODULE_DEVICE_ID_20W_LASER) {
+  //   power_table_ = power_table_20W;
+  //   SetToolhead(MODULE_TOOLHEAD_LASER_20W);
+  // }
+  // else if (laser->device_id_ == MODULE_DEVICE_ID_40W_LASER) {
+  //   power_table_ = power_table_40W;
+  //   SetToolhead(MODULE_TOOLHEAD_LASER_40W);
+  // }
+
+  laser_array[laser_init_total].power_table_ = power_table_1_6W;
   if (laser->device_id_ == MODULE_DEVICE_ID_1_6_W_LASER) {
-    power_table_ = power_table_1_6W;
+    laser_array[laser_init_total].power_table_ = power_table_1_6W;
     SetToolhead(MODULE_TOOLHEAD_LASER);
   } else if (laser->device_id_ == MODULE_DEVICE_ID_10W_LASER) {
-    power_table_ = power_table_10W;
+    laser_array[laser_init_total].power_table_ = power_table_10W;
     SetToolhead(MODULE_TOOLHEAD_LASER_10W);
   }
   else if (laser->device_id_ == MODULE_DEVICE_ID_20W_LASER) {
-    power_table_ = power_table_20W;
+    laser_array[laser_init_total].power_table_ = power_table_20W;
     SetToolhead(MODULE_TOOLHEAD_LASER_20W);
   }
   else if (laser->device_id_ == MODULE_DEVICE_ID_40W_LASER) {
-    power_table_ = power_table_40W;
+    laser_array[laser_init_total].power_table_ = power_table_40W;
     SetToolhead(MODULE_TOOLHEAD_LASER_40W);
   }
 
-  if (laser->device_id_ == MODULE_DEVICE_ID_20W_LASER)
-    LOG_I("Laser 20w Test firmware!!!\n");
-
-  if (laser->device_id_ == MODULE_DEVICE_ID_40W_LASER)
-    LOG_I("Laser 40w Test firmware!!!\n");
+  laser = &laser_array[laser_init_total];
+  laser_array[laser_init_total].module_index_ = laser_init_total;
+  laser_init_total++;
 
   return E_SUCCESS;
 }
@@ -309,7 +653,7 @@ void ToolHeadLaser::tim_pwm(uint16_t pwm) {
 void ToolHeadLaser::TurnOn() {
   if (state_ == TOOLHEAD_LASER_STATE_OFFLINE)
     return;
-
+  return;
   if ((laser->device_id_ == MODULE_DEVICE_ID_10W_LASER || laser->device_id_ == MODULE_DEVICE_ID_20W_LASER || \
       laser->device_id_ == MODULE_DEVICE_ID_40W_LASER) && laser->security_status_ != 0) {
     return;
@@ -334,6 +678,8 @@ void ToolHeadLaser::PwmCtrlDirectly(uint8_t duty) {
 }
 
 void ToolHeadLaser::TurnOff() {
+  CloseAllLaser();
+  return;
   if (state_ == TOOLHEAD_LASER_STATE_OFFLINE)
     return;
 
@@ -351,6 +697,7 @@ void ToolHeadLaser::TurnOff() {
 }
 
 void ToolHeadLaser::SetOutput(float power) {
+  return;
   if ((laser->device_id_ == MODULE_DEVICE_ID_10W_LASER || laser->device_id_ == MODULE_DEVICE_ID_20W_LASER || \
       laser->device_id_ == MODULE_DEVICE_ID_40W_LASER) && laser->security_status_ != 0) {
     return;
@@ -404,15 +751,27 @@ void ToolHeadLaser::SetPowerLimit(float limit) {
 }
 
 void ToolHeadLaser::SetFanPower(uint8_t power) {
-  CanStdMesgCmd_t cmd;
-  uint8_t         buffer[2];
-  buffer[0]  = 0;
-  buffer[1]  = power;
-  cmd.id     = msg_id_set_fan_;
-  cmd.data   = buffer;
-  cmd.length = 2;
+  // CanStdMesgCmd_t cmd;
+  // uint8_t         buffer[2];
+  // buffer[0]  = 0;
+  // buffer[1]  = power;
+  // cmd.id     = msg_id_set_fan_;
+  // cmd.data   = buffer;
+  // cmd.length = 2;
 
-  canhost.SendStdCmd(cmd);
+  CanStdFuncCmd_t cmd;
+  uint8_t msg_len = 0;
+  uint8_t can_buffer[2] = {0};
+
+  can_buffer[msg_len++] = 0;
+  can_buffer[msg_len++] = power;
+  cmd.id        = MODULE_FUNC_SET_FAN1;
+  cmd.data      = can_buffer;
+  cmd.length    = msg_len;
+
+  for (uint8_t i = 0; i < laser_init_total; i++) {
+    canhost.SendStdCmd(cmd, i);
+  }
 }
 
 void ToolHeadLaser::CheckFan(uint16_t pwm) {
@@ -1149,7 +1508,11 @@ ErrCode ToolHeadLaser::GetSecurityStatus(void) {
   cmd.id        = MODULE_FUNC_REPORT_SECURITY_STATUS;
   cmd.data      = NULL;
   cmd.length    = 0;
-  return canhost.SendStdCmd(cmd);
+
+  for (uint8_t i = 0; i < laser_init_total; i++) {
+    canhost.SendStdCmd(cmd, i);
+  }
+  return E_SUCCESS;
 }
 
 ErrCode ToolHeadLaser::SendSecurityStatus() {
@@ -1249,20 +1612,20 @@ ErrCode ToolHeadLaser::SetProtectTemp(SSTP_Event_t &event) {
 }
 
 ErrCode ToolHeadLaser::LaserControl(uint8_t state) {
-  CanStdFuncCmd_t cmd;
-  uint8_t can_buffer[1];
+  // CanStdFuncCmd_t cmd;
+  // uint8_t can_buffer[1];
 
-  can_buffer[0] = state;
-  cmd.id        = MODULE_FUNC_LASER_CTRL;
-  cmd.data      = can_buffer;
-  cmd.length    = 1;
+  // can_buffer[0] = state;
+  // cmd.id        = MODULE_FUNC_LASER_CTRL;
+  // cmd.data      = can_buffer;
+  // cmd.length    = 1;
 
-  ErrCode ret;
-  ret = canhost.SendStdCmdSync(cmd, 2000);
-  if (ret != E_SUCCESS) {
-    return ret;
-  }
-  laser_status_ = state ? LASER_ENABLE : LASER_DISABLE;
+  // ErrCode ret;
+  // ret = canhost.SendStdCmdSync(cmd, 2000);
+  // if (ret != E_SUCCESS) {
+  //   return ret;
+  // }
+  // laser_status_ = state ? LASER_ENABLE : LASER_DISABLE;
   return E_SUCCESS;
 }
 
@@ -1422,9 +1785,13 @@ ErrCode ToolHeadLaser::GetCrosslightOffset(SSTP_Event_t &event) {
 void ToolHeadLaser::TellSecurityStatus() {
   SendSecurityStatus();
 
-  LOG_I("laser open %dh %dm %ds, ", laser_open_time / (3600), (laser_open_time % (3600) / 60), (laser_open_time % (3600) % 60));
-  LOG_I("rec_error: 0x%x, fire_err : %d security_status_: 0x%x, ", rec_error, fire_sensor_trigger_, security_status_);
-  SERIAL_ECHOLNPAIR("Laser temp: ", laser->laser_temperature_, ", imu temp: ", laser->imu_temperature_, ", roll: ", laser->roll_, ", pitch: ", laser->pitch_, ", pwm_pin_pulldown_state_: ", laser->pwm_pin_pulldown_state_, ", pwm_pin_pullup_state_: ", laser->pwm_pin_pullup_state_);
+  LOG_I("laser open %dh %dm %ds\n", laser_open_time / (3600), (laser_open_time % (3600) / 60), (laser_open_time % (3600) % 60));
+  for (uint8_t i = 0; i < laser_init_total; i++) {
+    LOG_I("module%d: port_index: %s mac: 0x%x, dev_id: %d, rec_error: 0x%x, security_status_: 0x%x imu_temp: %d, laser_temp: %d\n",
+            i, laser_array[i].port_index_ == 0xFF ? "unknow" : port_info_str[laser_array[i].port_index_], laser_array[i].mac(), laser_array[i].device_id(), rec_error[i], laser_array[i].security_status_, laser_array[i].imu_temperature_, laser_array[i].laser_temperature_);
+  }
+  LOG_I("\n\n");
+  // SERIAL_ECHOLNPAIR("Laser temp: ", laser->laser_temperature_, ", imu temp: ", laser->imu_temperature_, ", roll: ", laser->roll_, ", pitch: ", laser->pitch_);
 }
 
 uint8_t ToolHeadLaser::LaserGetPwmPinState() {
@@ -1450,7 +1817,43 @@ void ToolHeadLaser::LaserConfirmPinState() {
   cmd.data      = can_buffer;
   cmd.length    = 1;
 
-  canhost.SendStdCmd(cmd);
+  for (uint8_t i = 0; i < laser_init_total; i++) {
+    canhost.SendStdCmd(cmd, i);
+  }
+}
+
+ErrCode ToolHeadLaser::LaserControlEx(uint8_t state) {
+  CanStdFuncCmd_t cmd;
+  uint8_t can_buffer[1];
+
+  can_buffer[0] = state;
+  cmd.id        = MODULE_FUNC_LASER_CTRL;
+  cmd.data      = can_buffer;
+  cmd.length    = 1;
+
+  ErrCode ret;
+  for (uint8_t i = 0; i < laser_init_total; i++) {
+    if (state) {
+      if (!laser_array[i].security_status_ && !rec_error[i] && laser_array[i].port_index_ != 0xFF)
+        can_buffer[0] = 1;
+      else
+        can_buffer[0] = 0;
+    }
+    ret = canhost.SendStdCmdSync(cmd, 2000, 1, i);
+    // ret = canhost.SendStdCmd(cmd, i);
+    LOG_I("LaserControlEx: modeule index: %d, ret: %d, power: %d\n", i, ret, can_buffer[0]);
+  }
+  return E_SUCCESS;
+}
+
+void ToolHeadLaser::OpenAllLaser(void) {
+  LaserControlEx(true);
+  SetLaserOutputPinSta(LOW);
+}
+
+void ToolHeadLaser::CloseAllLaser(void) {
+  SetLaserOutputPinSta(HIGH);
+  LaserControlEx(false);
 }
 
 void ToolHeadLaser::Process() {
@@ -1460,16 +1863,16 @@ void ToolHeadLaser::Process() {
   if (++timer_in_process_ < 100) return;
   timer_in_process_ = 0;
 
-  if (laser->device_id_ == MODULE_DEVICE_ID_10W_LASER || laser->device_id_ == MODULE_DEVICE_ID_20W_LASER || \
-      laser->device_id_ == MODULE_DEVICE_ID_40W_LASER) {
+  // if (laser->device_id_ == MODULE_DEVICE_ID_10W_LASER || laser->device_id_ == MODULE_DEVICE_ID_20W_LASER ||
+  //     laser->device_id_ == MODULE_DEVICE_ID_40W_LASER) {
     if (laser_pwm_pin_checked_ == false) {
-      PwmCtrlDirectly(255);
-      pwm_pin_pulldown_state_ = LaserGetPwmPinState();
-      PwmCtrlDirectly(0);
-      pwm_pin_pullup_state_ = LaserGetPwmPinState();
-      if (pwm_pin_pulldown_state_ == 0 && pwm_pin_pullup_state_ == 1) {
+      // PwmCtrlDirectly(255);
+      // pwm_pin_pulldown_state_ = LaserGetPwmPinState();
+      // PwmCtrlDirectly(0);
+      // pwm_pin_pullup_state_ = LaserGetPwmPinState();
+      // if (pwm_pin_pulldown_state_ == 0 && pwm_pin_pullup_state_ == 1) {
         LaserConfirmPinState();
-      }
+      // }
       laser_pwm_pin_checked_ = true;
     }
 
@@ -1491,17 +1894,19 @@ void ToolHeadLaser::Process() {
       start_tick--;
       if (start_tick == 0) {
         laser_open_time = 0;
-        if (!security_status_)
-          SetOutput(100);
-        else
-          LOG_W("****security_status_: 0x%x, open laser fail*****\n", security_status_);
+        OpenAllLaser();
+        SetFanPower(255);
+        // if (!security_status_)
+        //   SetOutput(100);
+        // else
+          // LOG_W("****security_status_: 0x%x, open laser fail*****\n", security_status_);
       }
     }
 
-    TurnoffLaserIfNeeded();
-  }
+    // TurnoffLaserIfNeeded();
+  // }
 
-  TryCloseFan();
+  // TryCloseFan();
 }
 
 
