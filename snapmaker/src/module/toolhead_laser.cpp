@@ -105,6 +105,10 @@ static void CallbackAckReportSecurity(CanStdDataFrame_t &cmd) {
   laser->laser_temperature_ = cmd.data[5];
   laser->imu_temperature_ = (int8_t)cmd.data[6];
 
+  if (laser->laser_temperature_ <= 0 || laser->imu_temperature_ <= 0) {
+    laser->security_status_ |= (1 << 1);
+  }
+
   laser->need_to_tell_hmi_ = true;
 
   if (laser->security_status_ != 0) {
@@ -310,10 +314,10 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
   ErrCode ret;
 
   CanExtCmd_t cmd;
-  uint8_t     func_buffer[2*12+2];
+  uint8_t     func_buffer[2*32+2];
 
   Function_t    function;
-  message_id_t  message_id[12];
+  message_id_t  message_id[32];
   uint8_t dir_pin[] = {E0_DIR_PIN, E1_DIR_PIN, X_DIR_PIN, Y_DIR_PIN, Z_DIR_PIN, B_DIR_PIN};
 
   if (axis_to_port[E_AXIS] != PORT_8PIN_1) {
