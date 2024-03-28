@@ -298,7 +298,11 @@ ErrCode ToolHeadLaser::Init(MAC_t &mac, uint8_t mac_index) {
   if (laser->device_id_ == MODULE_DEVICE_ID_40W_LASER)
     LOG_I("Laser 40w Test firmware!!!\n");
 
+  vTaskDelay(500);
   SetFireSensorReportTime(200);
+  vTaskDelay(500);
+  SetFireSensorReportTime(200);
+  vTaskDelay(100);
   SetFireSensorSensitivityCAN(0xFFFF, false);
 
   return E_SUCCESS;
